@@ -1,0 +1,41 @@
+[package]
+name = "assetcanon"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Domain/asset canonicalization and DNS validation toolkit"
+license = "MIT"
+readme = "README.md"
+
+[[bin]]
+name = "assetcanon"
+path = "src/main.rs"
+
+[lib]
+name = "assetcanon"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+once_cell = "1"
+idna = "1"
+publicsuffix = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+rayon = "1"
+hickory-resolver = { version = "0.26", features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+rand = "0.9"
+futures = "0.3"
+
+[dev-dependencies]
+pretty_assertions = "1"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
