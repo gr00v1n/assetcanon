@@ -92,7 +92,9 @@ pub fn normalize(raw_input: &str) -> Normalized {
     }
 }
 
-fn parse(raw: &str) -> Option<(String, Option<u16>, Option<String>, Option<&'static str>)> {
+type ParsedInput = (String, Option<u16>, Option<String>, Option<&'static str>);
+
+fn parse(raw: &str) -> Option<ParsedInput> {
     if has_scheme(raw) || raw.starts_with("//") {
         parse_url(raw)
     } else {
@@ -109,20 +111,18 @@ fn has_scheme(raw: &str) -> bool {
     if !first.is_ascii_alphabetic() {
         return false;
     }
-    let mut seen = 1;
-    for &b in iter {
+    for (seen, &b) in (1..).zip(iter) {
         if b == b':' {
             return seen >= 1 && raw.len() > seen + 2 && &raw[seen..seen + 3] == "://";
         }
         if !(b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'-')) {
             return false;
         }
-        seen += 1;
     }
     false
 }
 
-fn parse_url(raw: &str) -> Option<(String, Option<u16>, Option<String>, Option<&'static str>)> {
+fn parse_url(raw: &str) -> Option<ParsedInput> {
     let normalized = if raw.starts_with("//") {
         format!("http:{raw}")
     } else {
@@ -168,7 +168,12 @@ fn parse_url(raw: &str) -> Option<(String, Option<u16>, Option<String>, Option<&
             let (port, reason) = parse_port(port_str);
             return Some((host.to_string(), port, Some(scheme), reason));
         }
-        return Some((host.to_string(), None, Some(scheme), Some("invalid-ipv6-port")));
+        return Some((
+            host.to_string(),
+            None,
+            Some(scheme),
+            Some("invalid-ipv6-port"),
+        ));
     }
 
     // hostname[:port]
@@ -187,7 +192,7 @@ fn parse_url(raw: &str) -> Option<(String, Option<u16>, Option<String>, Option<&
     Some((authority.to_string(), None, Some(scheme), None))
 }
 
-fn parse_bare(raw: &str) -> Option<(String, Option<u16>, Option<String>, Option<&'static str>)> {
+fn parse_bare(raw: &str) -> Option<ParsedInput> {
     if raw.contains('@') {
         return Some((raw.to_string(), None, None, Some("contains-at")));
     }
@@ -262,13 +267,10 @@ fn normalize_domain(host: &str) -> Option<String> {
     if lowered.is_empty() {
         return None;
     }
-    let (ascii, result) = idna::domain_to_ascii_cow(
-        lowered.as_bytes(),
-        idna::AsciiDenyList::URL,
-    )
-    .ok()
-    .map(|cow| (cow.into_owned(), Ok::<(), ()>(())))
-    .unwrap_or_else(|| (lowered.clone(), Err(())));
+    let (ascii, result) = idna::domain_to_ascii_cow(lowered.as_bytes(), idna::AsciiDenyList::URL)
+        .ok()
+        .map(|cow| (cow.into_owned(), Ok::<(), ()>(())))
+        .unwrap_or_else(|| (lowered.clone(), Err(())));
     // hickory-dns 0.26 pairs with idna 1.x which returns Result from domain_to_ascii.
     // Keep the fallback path explicit.
     if result.is_err() && ascii == lowered {
@@ -325,7 +327,19 @@ pub fn to_asset_skeleton(norm: Normalized) -> Asset {
             covered_by: Vec::new(),
             dns: DnsStatus::Unknown,
             ips: Vec::new(),
-            cname: None,
+            cnames: Vec::new(),
+            wildcard_root: None,
+            wildcard_reason: None,
+            wildcard_ip_overlap_count: 0,
+            wildcard_cname_overlap_count: 0,
+            wildcard_host_ip_count: 0,
+            wildcard_signature_ip_count: 0,
+            wildcard_signature_cname_count: 0,
+            resolver_disagreement: false,
+            dead_zone: None,
+            flaky_zone: None,
+            cdn: None,
+            confidence: None,
             scope: ScopeStatus::Unknown,
         };
     }
@@ -340,7 +354,19 @@ pub fn to_asset_skeleton(norm: Normalized) -> Asset {
         covered_by: Vec::new(),
         dns: DnsStatus::Unknown,
         ips: Vec::new(),
-        cname: None,
+        cnames: Vec::new(),
+        wildcard_root: None,
+        wildcard_reason: None,
+        wildcard_ip_overlap_count: 0,
+        wildcard_cname_overlap_count: 0,
+        wildcard_host_ip_count: 0,
+        wildcard_signature_ip_count: 0,
+        wildcard_signature_cname_count: 0,
+        resolver_disagreement: false,
+        dead_zone: None,
+        flaky_zone: None,
+        cdn: None,
+        confidence: None,
         scope: ScopeStatus::Unknown,
     }
 }

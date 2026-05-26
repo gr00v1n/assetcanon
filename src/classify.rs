@@ -46,7 +46,19 @@ pub fn classify(norm: Normalized) -> Asset {
             covered_by: Vec::new(),
             dns: DnsStatus::Unknown,
             ips: Vec::new(),
-            cname: None,
+            cnames: Vec::new(),
+            wildcard_root: None,
+            wildcard_reason: None,
+            wildcard_ip_overlap_count: 0,
+            wildcard_cname_overlap_count: 0,
+            wildcard_host_ip_count: 0,
+            wildcard_signature_ip_count: 0,
+            wildcard_signature_cname_count: 0,
+            resolver_disagreement: false,
+            dead_zone: None,
+            flaky_zone: None,
+            cdn: None,
+            confidence: None,
             scope: ScopeStatus::Unknown,
         };
     }
@@ -99,7 +111,19 @@ pub fn classify(norm: Normalized) -> Asset {
         covered_by: Vec::new(),
         dns: DnsStatus::Unknown,
         ips: Vec::new(),
-        cname: None,
+        cnames: Vec::new(),
+        wildcard_root: None,
+        wildcard_reason: None,
+        wildcard_ip_overlap_count: 0,
+        wildcard_cname_overlap_count: 0,
+        wildcard_host_ip_count: 0,
+        wildcard_signature_ip_count: 0,
+        wildcard_signature_cname_count: 0,
+        resolver_disagreement: false,
+        dead_zone: None,
+        flaky_zone: None,
+        cdn: None,
+        confidence: None,
         scope: ScopeStatus::Unknown,
     }
 }
@@ -139,7 +163,9 @@ fn has_invalid_domain_syntax(host: &str) -> bool {
     if labels.len() < 2 {
         return true;
     }
-    labels.iter().any(|label| label.is_empty() || !LABEL_RE.is_match(label))
+    labels
+        .iter()
+        .any(|label| label.is_empty() || !LABEL_RE.is_match(label))
 }
 
 #[cfg(test)]

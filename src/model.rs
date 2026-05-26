@@ -59,6 +59,15 @@ impl DnsStatus {
     }
 }
 
+/// Why a DNS result was classified as a wildcard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WildcardReason {
+    IpOverlap,
+    CnameMatch,
+    TimeoutInferred,
+}
+
 /// Scope match outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -107,9 +116,64 @@ pub struct Asset {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ips: Vec<IpAddr>,
 
-    /// CNAME target if the host resolves via CNAME.
+    /// CNAME resolution chain in order, e.g. `["legacy.target.com",
+    /// "s3-bucket.amazonaws.com"]`. Empty when the host resolves directly via
+    /// A/AAAA. Preserved in chain order (not sorted) so downstream tools can
+    /// trace the full path — needed for dangling-CNAME / takeover detection and
+    /// CDN fingerprinting where intermediate hops carry information.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cnames: Vec<String>,
+
+    /// Wildcard root that explained a wildcard DNS status, e.g. `*.example.com`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cname: Option<String>,
+    pub wildcard_root: Option<String>,
+
+    /// Specific wildcard signal used for the verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wildcard_reason: Option<WildcardReason>,
+
+    /// Evidence counts behind a wildcard verdict. These are intentionally
+    /// aggregate counts, not per-resolver payloads, so JSON output stays small
+    /// on large runs.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wildcard_ip_overlap_count: usize,
+
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wildcard_cname_overlap_count: usize,
+
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wildcard_host_ip_count: usize,
+
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wildcard_signature_ip_count: usize,
+
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wildcard_signature_cname_count: usize,
+
+    /// True when independent resolvers disagreed on answer vs NXDOMAIN.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub resolver_disagreement: bool,
+
+    /// Dead ancestor zone that caused DNS validation to short-circuit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dead_zone: Option<String>,
+
+    /// Runtime flaky parent zone that caused DNS validation to short-circuit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flaky_zone: Option<String>,
+
+    /// CDN provider identified from the resolved IP set (e.g. `"cloudflare"`).
+    /// Set when every resolved IP falls in a known CDN range. Also acts as the
+    /// signal that downgraded an IP-overlap wildcard verdict to `resolved`,
+    /// since CDN IPs legitimately rotate and overlap is uninformative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cdn: Option<String>,
+
+    /// Confidence in the DNS verdict on a `[0.0, 1.0]` scale. Derived from the
+    /// existing wildcard evidence counts, multi-resolver agreement, and the
+    /// CDN tag. `None` when DNS validation didn't run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
 
     #[serde(default, skip_serializing_if = "is_unknown_scope")]
     pub scope: ScopeStatus,
@@ -121,6 +185,14 @@ fn is_unknown_dns(s: &DnsStatus) -> bool {
 
 fn is_unknown_scope(s: &ScopeStatus) -> bool {
     matches!(s, ScopeStatus::Unknown)
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+fn is_zero(v: &usize) -> bool {
+    *v == 0
 }
 
 impl Asset {
@@ -138,7 +210,19 @@ impl Asset {
             covered_by: Vec::new(),
             dns: DnsStatus::Unknown,
             ips: Vec::new(),
-            cname: None,
+            cnames: Vec::new(),
+            wildcard_root: None,
+            wildcard_reason: None,
+            wildcard_ip_overlap_count: 0,
+            wildcard_cname_overlap_count: 0,
+            wildcard_host_ip_count: 0,
+            wildcard_signature_ip_count: 0,
+            wildcard_signature_cname_count: 0,
+            resolver_disagreement: false,
+            dead_zone: None,
+            flaky_zone: None,
+            cdn: None,
+            confidence: None,
             scope: ScopeStatus::Unknown,
         }
     }

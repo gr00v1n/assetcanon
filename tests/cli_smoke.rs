@@ -8,7 +8,7 @@
 use assetcanon::classify::classify_str;
 use assetcanon::dedupe::dedupe;
 use assetcanon::extract;
-use assetcanon::model::{AssetKind, DnsStatus};
+use assetcanon::model::{AssetKind, DnsStatus, WildcardReason};
 use assetcanon::scope::ScopeMatcher;
 
 fn run_pipeline(text: &str) -> Vec<assetcanon::model::Asset> {
@@ -50,7 +50,7 @@ fn email_local_parts_are_not_mistaken_for_hosts() {
     let out = run_pipeline(input);
     let canonicals: Vec<&str> = out.iter().map(|a| a.canonical.as_str()).collect();
     assert!(canonicals.contains(&"baz.com"));
-    assert!(!canonicals.iter().any(|v| *v == "bar.com"));
+    assert!(!canonicals.contains(&"bar.com"));
 }
 
 #[test]
@@ -81,6 +81,30 @@ fn dns_status_default_is_unknown() {
 }
 
 #[test]
+fn dns_json_explanation_fields_serialize() {
+    let mut a = classify_str("api.example.com");
+    a.dns = DnsStatus::WildcardIp;
+    a.wildcard_root = Some("*.example.com".into());
+    a.wildcard_reason = Some(WildcardReason::IpOverlap);
+    a.wildcard_ip_overlap_count = 1;
+    a.wildcard_host_ip_count = 2;
+    a.wildcard_signature_ip_count = 5;
+    a.resolver_disagreement = true;
+    a.dead_zone = Some("dead.example.com".into());
+    a.flaky_zone = Some("flaky.example.com".into());
+
+    let value = serde_json::to_value(&a).unwrap();
+    assert_eq!(value["wildcard_root"], "*.example.com");
+    assert_eq!(value["wildcard_reason"], "ip_overlap");
+    assert_eq!(value["wildcard_ip_overlap_count"], 1);
+    assert_eq!(value["wildcard_host_ip_count"], 2);
+    assert_eq!(value["wildcard_signature_ip_count"], 5);
+    assert_eq!(value["resolver_disagreement"], true);
+    assert_eq!(value["dead_zone"], "dead.example.com");
+    assert_eq!(value["flaky_zone"], "flaky.example.com");
+}
+
+#[test]
 fn wildcard_coverage_is_annotated() {
     let input = "api.example.com\n*.example.com\n";
     let out = run_pipeline(input);
@@ -88,5 +112,8 @@ fn wildcard_coverage_is_annotated() {
         .iter()
         .find(|a| a.kind == AssetKind::Subdomain)
         .expect("subdomain in output");
-    assert!(!api.covered_by.is_empty(), "api.example.com should be covered by *.example.com");
+    assert!(
+        !api.covered_by.is_empty(),
+        "api.example.com should be covered by *.example.com"
+    );
 }

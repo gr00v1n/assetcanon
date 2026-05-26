@@ -30,6 +30,7 @@ hickory-resolver = { version = "0.26", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 rand = "0.9"
 futures = "0.3"
+ipnet = "2"
 
 [dev-dependencies]
 pretty_assertions = "1"

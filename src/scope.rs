@@ -29,7 +29,8 @@ enum RuleKind {
 
 #[derive(Debug, Default)]
 pub struct ScopeMatcher {
-    exact_apex: HashMap<String, Vec<String>>,     // canonical → rules
+    respect_port: bool,
+    exact_apex: HashMap<String, Vec<String>>, // canonical → rules
     exact_subdomain: HashMap<String, Vec<String>>,
     exact_url: HashMap<String, Vec<String>>,
     exact_ip: HashMap<String, Vec<String>>,
@@ -42,7 +43,18 @@ impl ScopeMatcher {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let mut m = Self::default();
+        Self::compile_with_options(rules, false)
+    }
+
+    pub fn compile_with_options<I, S>(rules: I, respect_port: bool) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut m = Self {
+            respect_port,
+            ..Self::default()
+        };
         for raw in rules {
             let raw = raw.as_ref().trim();
             if raw.is_empty() || raw.starts_with('#') {
@@ -63,7 +75,7 @@ impl ScopeMatcher {
                     AssetKind::Garbage => continue,
                 }
             };
-            let canonical = host_without_port(&asset);
+            let canonical = m.canonical_for_match(&asset);
             let rule = Rule {
                 raw: raw.to_string(),
                 kind,
@@ -112,7 +124,7 @@ impl ScopeMatcher {
             return Vec::new();
         }
 
-        let host = host_without_port(asset);
+        let host = self.canonical_for_match(asset);
 
         match asset.kind {
             AssetKind::Ip => {
@@ -158,11 +170,7 @@ impl ScopeMatcher {
                     let mut parent = host.as_str();
                     while let Some((_, rest)) = parent.split_once('.') {
                         parent = rest;
-                        for bucket in [
-                            &self.exact_apex,
-                            &self.exact_url,
-                            &self.exact_subdomain,
-                        ] {
+                        for bucket in [&self.exact_apex, &self.exact_url, &self.exact_subdomain] {
                             if let Some(rules) = bucket.get(parent) {
                                 for r in rules {
                                     hits.insert(r.as_str());
@@ -191,6 +199,14 @@ impl ScopeMatcher {
 
     pub fn is_in_scope(&self, asset: &Asset, strict: bool) -> bool {
         !self.matches(asset, strict).is_empty()
+    }
+
+    fn canonical_for_match(&self, asset: &Asset) -> String {
+        if self.respect_port {
+            asset.canonical.clone()
+        } else {
+            host_without_port(asset)
+        }
     }
 }
 
@@ -233,5 +249,20 @@ mod tests {
         let m = ScopeMatcher::compile(["*.example.com"]);
         assert!(m.is_in_scope(&classify_str("foo.example.com"), true));
         assert!(!m.is_in_scope(&classify_str("example.com"), true));
+    }
+
+    #[test]
+    fn port_matching_is_host_based_by_default() {
+        let m = ScopeMatcher::compile(["api.example.com"]);
+        assert!(m.is_in_scope(&classify_str("api.example.com:8443"), true));
+    }
+
+    #[test]
+    fn respect_port_requires_matching_port() {
+        let m = ScopeMatcher::compile_with_options(["api.example.com"], true);
+        assert!(!m.is_in_scope(&classify_str("api.example.com:8443"), true));
+
+        let m = ScopeMatcher::compile_with_options(["api.example.com:8443"], true);
+        assert!(m.is_in_scope(&classify_str("api.example.com:8443"), true));
     }
 }

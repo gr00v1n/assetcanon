@@ -10,20 +10,17 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
-static URL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)((?:https?://|//)[^\s<>'"]+)"#).unwrap()
-});
+static URL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)((?:https?://|//)[^\s<>'"]+)"#).unwrap());
 // Leading `[^...]` boundary is consumed; trailing boundary is a zero-width
 // `\b` so adjacent tokens separated by whitespace or newlines still match.
-static BRACKET_IPV6_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?:^|[^\w:])(\[[0-9a-fA-F:.]+\](?::\d{1,5})?)").unwrap()
-});
+static BRACKET_IPV6_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?:^|[^\w:])(\[[0-9a-fA-F:.]+\](?::\d{1,5})?)").unwrap());
 static IPV6_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?:^|[^\w:])((?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4})\b").unwrap()
 });
-static IPV4_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?:^|[^\w.])((?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?)\b").unwrap()
-});
+static IPV4_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?:^|[^\w.])((?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?)\b").unwrap());
 static DOMAIN_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?:^|[^@\w.-])((?:\*\.)?(?:[A-Za-z0-9\u{0080}-\u{FFFF}-]{1,63}\.)+[A-Za-z0-9\u{0080}-\u{FFFF}-]{2,63}\.?(?::\d{1,5})?)\b",
@@ -41,17 +38,25 @@ fn trim_token(s: &str) -> String {
 pub fn from_text(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    // Invariant: `occupied` is kept sorted by start and pairwise disjoint, so
+    // `overlaps` can answer in O(log n) via a single predecessor lookup. Each
+    // regex pass's matches are themselves scan-ordered and disjoint, so we
+    // collect them into `additions` and merge in one O(n) sweep per pass —
+    // the original per-match linear scan was O(n²) on dirty dumps.
     let mut occupied: Vec<(usize, usize)> = Vec::new();
 
+    let mut additions: Vec<(usize, usize)> = Vec::new();
     for m in URL_RE.find_iter(text) {
         let token = trim_token(m.as_str());
         if !token.is_empty() && seen.insert(token.clone()) {
             out.push(token);
         }
-        occupied.push((m.start(), m.end()));
+        additions.push((m.start(), m.end()));
     }
+    occupied = merge_sorted_disjoint(occupied, additions);
 
     for re in [&*BRACKET_IPV6_RE, &*IPV6_RE, &*IPV4_RE, &*DOMAIN_RE] {
+        let mut additions: Vec<(usize, usize)> = Vec::new();
         for cap in re.captures_iter(text) {
             let Some(m) = cap.get(1) else { continue };
             if overlaps(m.start(), m.end(), &occupied) {
@@ -70,15 +75,47 @@ pub fn from_text(text: &str) -> Vec<String> {
             }
             // Reserve the range so inner regex passes (e.g. bare IPv6 inside a
             // bracketed match) don't re-extract a partial copy.
-            occupied.push((m.start(), m.end()));
+            additions.push((m.start(), m.end()));
         }
+        occupied = merge_sorted_disjoint(occupied, additions);
     }
 
     out
 }
 
+/// Overlap check against a sorted, pairwise-disjoint `occupied` slice. For
+/// such a slice the predecessor of `end` is the only range that can overlap
+/// `[start, end)` — if its `e <= start` then by disjoint+sorted ordering all
+/// earlier ranges have even smaller `e` and cannot overlap either.
 fn overlaps(start: usize, end: usize, occupied: &[(usize, usize)]) -> bool {
-    occupied.iter().any(|&(s, e)| start < e && end > s)
+    let upper = occupied.partition_point(|&(s, _)| s < end);
+    upper > 0 && occupied[upper - 1].1 > start
+}
+
+/// Merge two sorted, pairwise-disjoint slices of `(start, end)` into one
+/// sorted, pairwise-disjoint vec. Assumes the new additions don't overlap
+/// existing entries (the caller has already filtered via `overlaps`).
+fn merge_sorted_disjoint(a: Vec<(usize, usize)>, b: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    if b.is_empty() {
+        return a;
+    }
+    if a.is_empty() {
+        return b;
+    }
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        if a[i].0 <= b[j].0 {
+            out.push(a[i]);
+            i += 1;
+        } else {
+            out.push(b[j]);
+            j += 1;
+        }
+    }
+    out.extend_from_slice(&a[i..]);
+    out.extend_from_slice(&b[j..]);
+    out
 }
 
 /// Because Rust regex lacks lookahead/lookbehind we used `(?:^|[^...])`
@@ -86,12 +123,10 @@ fn overlaps(start: usize, end: usize, occupied: &[(usize, usize)]) -> bool {
 /// Strip them.
 fn strip_regex_boundary(token: &str) -> String {
     let t = token.trim().trim_matches(TRIM);
-    let t = t.trim_start_matches(|c: char| {
-        !(c.is_alphanumeric() || c == '[' || c == '*' || c == ':')
-    });
-    let t = t.trim_end_matches(|c: char| {
-        !(c.is_alphanumeric() || c == ']' || c == '.' || c == '*')
-    });
+    let t =
+        t.trim_start_matches(|c: char| !(c.is_alphanumeric() || c == '[' || c == '*' || c == ':'));
+    let t =
+        t.trim_end_matches(|c: char| !(c.is_alphanumeric() || c == ']' || c == '.' || c == '*'));
     // Strip trailing dot(s) only if there are two (x.com.. -> x.com.); single trailing
     // dot is valid FQDN notation.
     let t = t.trim_end_matches("..");

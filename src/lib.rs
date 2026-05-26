@@ -6,6 +6,7 @@
 //! Each stage is independently usable as a library function. The CLI wraps
 //! them into Unix-style subcommands.
 
+pub mod cdn;
 pub mod classify;
 pub mod dedupe;
 pub mod dns;
